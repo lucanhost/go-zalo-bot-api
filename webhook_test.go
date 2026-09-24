@@ -39,14 +39,14 @@ func TestWebhookHandlerOrderAndAsyncDispatch(t *testing.T) {
 
 	// 405
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
 	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost {
 		t.Fatalf("405: code=%d allow=%q", rec.Code, rec.Header().Get("Allow"))
 	}
 
 	// 403
 	rec = httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", strings.NewReader(`{}`))
 	req.Header.Set("X-Bot-Api-Secret-Token", "wrong")
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -55,7 +55,7 @@ func TestWebhookHandlerOrderAndAsyncDispatch(t *testing.T) {
 
 	// 200 + async dispatch
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"ok":true,"result":{"event_name":"message.text.received","message":{"text":"x"}}}`))
+	req = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", strings.NewReader(`{"ok":true,"result":{"event_name":"message.text.received","message":{"text":"x"}}}`))
 	req.Header.Set("X-Bot-Api-Secret-Token", "secret-123")
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -77,7 +77,7 @@ func TestWebhookHandlerPayloadTooLargeIs413(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("x", (1<<20)+1)))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", strings.NewReader(strings.Repeat("x", (1<<20)+1)))
 	req.Header.Set("X-Bot-Api-Secret-Token", "secret-123")
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -89,7 +89,7 @@ func TestWebhookHandlerBadJSONIs400(t *testing.T) {
 	b, _ := New("TOKEN")
 	h, _ := b.WebhookHandler("secret-123")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{`))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", strings.NewReader(`{`))
 	req.Header.Set("X-Bot-Api-Secret-Token", "secret-123")
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -106,7 +106,7 @@ func TestWebhookHandlerFullQueueIs503(t *testing.T) {
 	code := 0
 	for i := 0; i < 20; i++ {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", strings.NewReader(payload))
 		req.Header.Set("X-Bot-Api-Secret-Token", "secret-123")
 		h.ServeHTTP(rec, req)
 		if rec.Code == http.StatusServiceUnavailable {
@@ -133,7 +133,7 @@ func TestSetWebhookValidatesInputs(t *testing.T) {
 }
 
 func TestSetWebhookReturnsVerificationWithoutError(t *testing.T) {
-	b := fakeBot(t, func(method string, body map[string]any) string {
+	b := fakeBot(t, func(method string, _ map[string]any) string {
 		if method != "setWebhook" {
 			t.Errorf("method = %s", method)
 		}

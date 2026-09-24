@@ -2,20 +2,23 @@ package api
 
 import "fmt"
 
-type APIError struct {
+// Error is an error returned by the Zalo Bot API.
+type Error struct {
 	Code        int
 	Description string
 	Method      string
 	HTTPStatus  int
 }
 
-func (e *APIError) Error() string {
+func (e *Error) Error() string {
 	if e.Description != "" {
 		return fmt.Sprintf("zalobot: %s failed: %d %s", e.Method, e.Code, e.Description)
 	}
 	return fmt.Sprintf("zalobot: %s failed: %d", e.Method, e.Code)
 }
 
+// TransportError is a failure to reach the Zalo Bot API. RedactedURL never
+// contains the bot token.
 type TransportError struct {
 	Method      string
 	RedactedURL string
@@ -28,6 +31,7 @@ func (e *TransportError) Error() string {
 
 func (e *TransportError) Unwrap() error { return e.Err }
 
+// DecodeError is a response that could not be decoded as the expected JSON.
 type DecodeError struct {
 	Method     string
 	HTTPStatus int

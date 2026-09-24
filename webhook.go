@@ -11,6 +11,8 @@ import (
 
 const maxWebhookBody = 1 << 20
 
+// WebhookInfo describes the webhook configuration returned by the webhook
+// methods.
 type WebhookInfo struct {
 	URL                  string             `json:"url"`
 	UpdatedAt            int64              `json:"updated_at"`
@@ -18,6 +20,7 @@ type WebhookInfo struct {
 	Verification         *WebhookTestResult `json:"verification,omitempty"`
 }
 
+// WebhookTestResult is the outcome of a webhook verification attempt.
 type WebhookTestResult struct {
 	OK      bool   `json:"ok"`
 	URL     string `json:"url"`
@@ -25,6 +28,9 @@ type WebhookTestResult struct {
 	Hint    string `json:"hint"`
 }
 
+// VerifyWebhookSecret reports whether got matches want in constant time. It
+// returns false when want is empty, so an unset secret never authenticates a
+// request.
 func VerifyWebhookSecret(got, want string) bool {
 	if want == "" {
 		return false
@@ -84,6 +90,7 @@ func (b *Bot) SetWebhook(ctx context.Context, rawURL, secret string) (*WebhookIn
 	return &info, nil
 }
 
+// DeleteWebhook removes the bot's webhook so that getUpdates can be used.
 func (b *Bot) DeleteWebhook(ctx context.Context) (*WebhookInfo, error) {
 	var info WebhookInfo
 	if err := b.call(ctx, "deleteWebhook", map[string]any{}, &info); err != nil {
@@ -92,6 +99,8 @@ func (b *Bot) DeleteWebhook(ctx context.Context) (*WebhookInfo, error) {
 	return &info, nil
 }
 
+// GetWebhookInfo returns the bot's current webhook configuration. An empty URL
+// means no webhook is registered.
 func (b *Bot) GetWebhookInfo(ctx context.Context) (*WebhookInfo, error) {
 	var info WebhookInfo
 	if err := b.call(ctx, "getWebhookInfo", map[string]any{}, &info); err != nil {
@@ -100,6 +109,8 @@ func (b *Bot) GetWebhookInfo(ctx context.Context) (*WebhookInfo, error) {
 	return &info, nil
 }
 
+// TestWebhook asks Zalo to call the registered webhook and reports whether it
+// responded successfully. It is rate limited per bot per day (error 426).
 func (b *Bot) TestWebhook(ctx context.Context) (*WebhookTestResult, error) {
 	var res WebhookTestResult
 	if err := b.call(ctx, "testWebhook", map[string]any{}, &res); err != nil {

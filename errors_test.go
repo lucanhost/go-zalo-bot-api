@@ -33,7 +33,16 @@ func TestPredicatesUseCodeOrHTTPStatus(t *testing.T) {
 }
 
 func TestAliasesResolveToInternalTypes(t *testing.T) {
-	var _ *api.APIError = &APIError{}
-	var _ *api.DecodeError = &DecodeError{}
-	var _ *api.TransportError = &TransportError{}
+	var apiErr *api.Error
+	if !errors.As(&APIError{Code: 401}, &apiErr) {
+		t.Fatal("APIError does not alias api.Error")
+	}
+	var decodeErr *api.DecodeError
+	if !errors.As(&DecodeError{}, &decodeErr) {
+		t.Fatal("DecodeError does not alias api.DecodeError")
+	}
+	var transportErr *api.TransportError
+	if !errors.As(&TransportError{}, &transportErr) {
+		t.Fatal("TransportError does not alias api.TransportError")
+	}
 }

@@ -11,6 +11,7 @@ import (
 
 type handlerCtxKey struct{}
 
+// Bot is a client for a single Zalo bot. It is safe for concurrent use.
 type Bot struct {
 	token string
 	cfg   *config
@@ -36,6 +37,8 @@ type Bot struct {
 	closeOnce sync.Once
 }
 
+// New creates a Bot for the given token. It returns ErrNoToken when the token
+// is empty and a ValidationError when an option value is out of range.
 func New(token string, opts ...Option) (*Bot, error) {
 	if token == "" {
 		return nil, ErrNoToken
@@ -89,8 +92,11 @@ func (b *Bot) reportError(err error) {
 	}
 }
 
+// Done returns a channel that is closed once the bot has fully stopped, after
+// either Stop/Shutdown or a fatal polling error.
 func (b *Bot) Done() <-chan struct{} { return b.done }
 
+// Err returns the error that stopped the bot, or nil after a graceful stop.
 func (b *Bot) Err() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -105,6 +111,7 @@ func (b *Bot) setErr(err error) {
 	b.mu.Unlock()
 }
 
+// IsPolling reports whether the long-polling loop is running.
 func (b *Bot) IsPolling() bool { return b.polling.Load() }
 
 // Shutdown stops the bot and waits for the drain or ctx deadline. If shutdown is

@@ -3,6 +3,7 @@ package zalobot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -57,7 +58,8 @@ func TestSendMessageRejectsParseModeWithTextStyles(t *testing.T) {
 		ParseMode:  ParseModeMarkdown,
 		TextStyles: []TextStyle{{Start: 0, Len: 1}},
 	})
-	if _, ok := err.(*ValidationError); !ok {
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
 		t.Fatalf("err = %v, want *ValidationError", err)
 	}
 }

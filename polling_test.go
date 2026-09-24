@@ -19,7 +19,7 @@ func TestStartRejectsBadClientTimeout(t *testing.T) {
 }
 
 func TestStartErrorsWhenWebhookActive(t *testing.T) {
-	b := fakeBot(t, func(method string, _ map[string]any) string {
+	b := fakeBot(t, func(_ string, _ map[string]any) string {
 		return `{"ok":true,"result":{"url":"https://hook","updated_at":1}}`
 	})
 	err := b.Start(context.Background())

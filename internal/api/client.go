@@ -1,3 +1,5 @@
+// Package api implements the low-level Zalo Bot HTTP transport used by the
+// zalobot package. It is internal and not part of the public API.
 package api
 
 import (
@@ -13,12 +15,15 @@ import (
 
 const maxResponseBytes = 4 << 20
 
+// Client is a minimal JSON transport for the Zalo Bot API.
 type Client struct {
 	token   string
 	baseURL string
 	http    *http.Client
 }
 
+// NewClient returns a Client for the given token and base URL. A nil http
+// client falls back to http.DefaultClient.
 func NewClient(token, baseURL string, hc *http.Client) *Client {
 	if hc == nil {
 		hc = http.DefaultClient
@@ -26,14 +31,19 @@ func NewClient(token, baseURL string, hc *http.Client) *Client {
 	return &Client{token: token, baseURL: strings.TrimRight(baseURL, "/"), http: hc}
 }
 
+// URL returns the request URL for a method, including the bot token.
 func (c *Client) URL(method string) string {
 	return c.baseURL + "/bot" + c.token + "/" + method
 }
 
+// RedactedURL returns the request URL with the bot token replaced by
+// "<TOKEN>", for safe use in error messages.
 func (c *Client) RedactedURL(method string) string {
 	return c.baseURL + "/bot<TOKEN>/" + method
 }
 
+// Call posts params as JSON to method and returns the raw `result` field. It
+// returns an *Error, *TransportError, or *DecodeError on failure.
 func (c *Client) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	var body io.Reader
 	if params != nil {
@@ -56,7 +66,7 @@ func (c *Client) Call(ctx context.Context, method string, params any) (json.RawM
 	if err != nil {
 		return nil, &TransportError{Method: method, RedactedURL: c.RedactedURL(method), Err: unwrapURLErr(err)}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
@@ -74,7 +84,7 @@ func (c *Client) Call(ctx context.Context, method string, params any) (json.RawM
 		if code == 0 {
 			code = resp.StatusCode
 		}
-		return nil, &APIError{Code: code, Description: env.Description, Method: method, HTTPStatus: resp.StatusCode}
+		return nil, &Error{Code: code, Description: env.Description, Method: method, HTTPStatus: resp.StatusCode}
 	}
 	return env.Result, nil
 }

@@ -59,7 +59,7 @@ func chatKey(u Update) string {
 func (d *dispatcher) admitNonBlocking(u Update) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.admitLocked(u, nil)
+	return d.admitLocked(context.Background(), false, u)
 }
 
 func (d *dispatcher) admitBlocking(ctx context.Context, u Update) error {
@@ -71,16 +71,16 @@ func (d *dispatcher) admitBlocking(ctx context.Context, u Update) error {
 		d.mu.Unlock()
 	})
 	defer stop()
-	return d.admitLocked(u, ctx)
+	return d.admitLocked(ctx, true, u)
 }
 
-func (d *dispatcher) admitLocked(u Update, ctx context.Context) error {
+func (d *dispatcher) admitLocked(ctx context.Context, blocking bool, u Update) error {
 	key := chatKey(u)
 	for {
 		if d.stopped {
 			return ErrStopped
 		}
-		if ctx != nil && ctx.Err() != nil {
+		if blocking && ctx.Err() != nil {
 			return ctx.Err()
 		}
 		cq := d.queues[key]
@@ -99,7 +99,7 @@ func (d *dispatcher) admitLocked(u Update, ctx context.Context) error {
 			d.startOnce.Do(d.start)
 			return nil
 		}
-		if ctx == nil {
+		if !blocking {
 			return ErrQueueFull
 		}
 		d.cond.Wait()

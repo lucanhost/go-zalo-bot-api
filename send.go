@@ -34,6 +34,8 @@ func validateText(field, text string, parseMode ParseMode) error {
 	return nil
 }
 
+// SendMessage sends a text message to chatID. ParseMode and TextStyles are
+// mutually exclusive; text must be 1..2000 characters unless ParseMode is set.
 func (b *Bot) SendMessage(ctx context.Context, chatID, text string, o *SendMessageOptions) (*SentMessage, error) {
 	if chatID == "" {
 		return nil, &ValidationError{Field: "chatID", Reason: "must not be empty"}
@@ -64,6 +66,7 @@ func (b *Bot) SendMessage(ctx context.Context, chatID, text string, o *SendMessa
 	return &out, nil
 }
 
+// SendPhoto sends an image by URL, with an optional caption.
 func (b *Bot) SendPhoto(ctx context.Context, chatID, photo string, o *SendPhotoOptions) (*SentMessage, error) {
 	if chatID == "" {
 		return nil, &ValidationError{Field: "chatID", Reason: "must not be empty"}
@@ -85,6 +88,7 @@ func (b *Bot) SendPhoto(ctx context.Context, chatID, photo string, o *SendPhotoO
 	return &out, nil
 }
 
+// SendSticker sends a sticker by its Zalo sticker ID.
 func (b *Bot) SendSticker(ctx context.Context, chatID, sticker string) (*SentMessage, error) {
 	if chatID == "" {
 		return nil, &ValidationError{Field: "chatID", Reason: "must not be empty"}
@@ -99,6 +103,8 @@ func (b *Bot) SendSticker(ctx context.Context, chatID, sticker string) (*SentMes
 	return &out, nil
 }
 
+// SendVoice sends a voice message from an .aac URL. It is supported only in
+// 1-to-1 conversations; a group chatID may report success without delivering.
 func (b *Bot) SendVoice(ctx context.Context, chatID, voiceURL string) (*SentMessage, error) {
 	if chatID == "" {
 		return nil, &ValidationError{Field: "chatID", Reason: "must not be empty"}
@@ -114,6 +120,7 @@ func (b *Bot) SendVoice(ctx context.Context, chatID, voiceURL string) (*SentMess
 	return &out, nil
 }
 
+// SendChatAction shows a temporary status such as "typing" in chatID.
 func (b *Bot) SendChatAction(ctx context.Context, chatID string, action ChatAction) error {
 	if chatID == "" {
 		return &ValidationError{Field: "chatID", Reason: "must not be empty"}

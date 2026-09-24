@@ -7,8 +7,10 @@ import (
 	"time"
 )
 
+// EventName identifies the kind of an incoming update.
 type EventName string
 
+// Event names delivered by the Zalo Bot Platform.
 const (
 	EventTextReceived        EventName = "message.text.received"
 	EventImageReceived       EventName = "message.image.received"
@@ -17,13 +19,16 @@ const (
 	EventUnsupportedReceived EventName = "message.unsupported.received"
 )
 
+// ChatType identifies whether a conversation is private or a group.
 type ChatType string
 
+// Chat types reported in Chat.Type.
 const (
 	ChatPrivate ChatType = "PRIVATE"
 	ChatGroup   ChatType = "GROUP"
 )
 
+// User describes the sender of a message.
 type User struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
@@ -31,6 +36,8 @@ type User struct {
 	IsBot       bool   `json:"is_bot"`
 }
 
+// UnmarshalJSON decodes a User, normalizing the display name from either
+// `display_name` or the compatibility field `name`.
 func (u *User) UnmarshalJSON(b []byte) error {
 	type alias User
 	var a struct {
@@ -47,6 +54,7 @@ func (u *User) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// BotInfo describes the bot itself, as returned by GetMe.
 type BotInfo struct {
 	ID            string `json:"id"`
 	DisplayName   string `json:"display_name"`
@@ -55,6 +63,8 @@ type BotInfo struct {
 	CanJoinGroups bool   `json:"can_join_groups"`
 }
 
+// UnmarshalJSON decodes BotInfo, normalizing the account name from either
+// `account_name` or the compatibility field `name`.
 func (b *BotInfo) UnmarshalJSON(data []byte) error {
 	type alias BotInfo
 	var a struct {
@@ -71,11 +81,15 @@ func (b *BotInfo) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Chat describes the conversation an update belongs to. Use ID when sending
+// a reply.
 type Chat struct {
 	ID   string   `json:"id"`
 	Type ChatType `json:"chat_type"`
 }
 
+// Message is the content of a message event. Only the fields relevant to the
+// event are populated.
 type Message struct {
 	From        *User  `json:"from"`
 	Chat        *Chat  `json:"chat"`
@@ -90,6 +104,8 @@ type Message struct {
 	Date        int64  `json:"date"`
 }
 
+// UnmarshalJSON decodes a Message, normalizing the image URL from either
+// `photo` or the compatibility field `photo_url`.
 func (m *Message) UnmarshalJSON(b []byte) error {
 	type alias Message
 	var a struct {
@@ -106,14 +122,18 @@ func (m *Message) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Time returns the message timestamp. Date is in milliseconds since the Unix
+// epoch.
 func (m *Message) Time() time.Time { return time.UnixMilli(m.Date) }
 
+// Update is a single event delivered by polling or a webhook.
 type Update struct {
 	EventName EventName       `json:"event_name"`
 	Message   *Message        `json:"message"`
 	Raw       json.RawMessage `json:"-"`
 }
 
+// UnmarshalJSON decodes an Update and keeps a copy of the raw object in Raw.
 func (u *Update) UnmarshalJSON(b []byte) error {
 	type alias Update
 	var a alias
@@ -125,11 +145,14 @@ func (u *Update) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// SentMessage is the receipt returned by the send methods.
 type SentMessage struct {
 	MessageID string `json:"message_id"`
 	Date      int64  `json:"date"`
 }
 
+// Time returns the send timestamp. Date is in milliseconds since the Unix
+// epoch.
 func (s *SentMessage) Time() time.Time { return time.UnixMilli(s.Date) }
 
 func decodeUpdates(raw json.RawMessage) ([]Update, error) {

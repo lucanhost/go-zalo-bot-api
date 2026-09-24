@@ -79,45 +79,45 @@ func (h *handlerSet) run(ctx context.Context, u Update) {
 	h.mu.RUnlock()
 
 	for _, fn := range events {
-		h.call(fn, ctx, u)
+		h.call(ctx, fn, u)
 	}
 	if u.EventName == EventUnsupportedReceived || u.Message == nil {
 		return
 	}
 	for _, fn := range messages {
-		h.callMessage(fn, ctx, u.Message)
+		h.callMessage(ctx, fn, u.Message)
 	}
 	if u.Message.Text == "" {
 		return
 	}
 	for _, th := range texts {
 		if m := th.re.FindStringSubmatch(u.Message.Text); m != nil {
-			h.callText(th, ctx, u.Message, m)
+			h.callText(ctx, th, u.Message, m)
 		}
 	}
 	for _, ch := range commands {
 		if name, args, ok := parseCommand(u.Message.Text); ok && name == ch.name {
-			h.callCommand(ch, ctx, u.Message, args)
+			h.callCommand(ctx, ch, u.Message, args)
 		}
 	}
 }
 
-func (h *handlerSet) call(fn func(context.Context, Update), ctx context.Context, u Update) {
+func (h *handlerSet) call(ctx context.Context, fn func(context.Context, Update), u Update) {
 	defer h.recover()
 	fn(ctx, u)
 }
 
-func (h *handlerSet) callMessage(fn func(context.Context, *Message), ctx context.Context, m *Message) {
+func (h *handlerSet) callMessage(ctx context.Context, fn func(context.Context, *Message), m *Message) {
 	defer h.recover()
 	fn(ctx, m)
 }
 
-func (h *handlerSet) callText(th textHandler, ctx context.Context, m *Message, match []string) {
+func (h *handlerSet) callText(ctx context.Context, th textHandler, m *Message, match []string) {
 	defer h.recover()
 	th.fn(ctx, m, match)
 }
 
-func (h *handlerSet) callCommand(ch commandHandler, ctx context.Context, m *Message, args []string) {
+func (h *handlerSet) callCommand(ctx context.Context, ch commandHandler, m *Message, args []string) {
 	defer h.recover()
 	ch.fn(ctx, m, args)
 }
@@ -148,27 +148,44 @@ func parseCommand(text string) (name string, args []string, ok bool) {
 	return name, fields[1:], true
 }
 
+// OnEvent registers a handler for a specific event name. It fires for every
+// matching update, including ones OnMessage and OnText do not see.
 func (b *Bot) OnEvent(name EventName, fn func(context.Context, Update)) {
 	b.handlers.OnEvent(name, fn)
 }
 
+// OnMessage registers a handler that runs for every message event. It is not
+// called for events that carry no message.
 func (b *Bot) OnMessage(fn func(context.Context, *Message)) { b.handlers.OnMessage(fn) }
 
+// OnText registers a handler that runs when a message text matches re. The
+// match slice contains the full match and any capture groups.
 func (b *Bot) OnText(re *regexp.Regexp, fn func(context.Context, *Message, []string)) {
 	b.handlers.OnText(re, fn)
 }
 
+// OnCommand registers a handler for messages of the form "/name args". The
+// args slice holds the whitespace-separated arguments after the command.
 func (b *Bot) OnCommand(name string, fn func(context.Context, *Message, []string)) {
 	b.handlers.OnCommand(name, fn)
 }
 
+// OnError registers a handler for asynchronous errors such as polling
+// failures, dropped Updates, and handler panics. Handlers may be called
+// concurrently. If none is registered, errors are logged with slog.
 func (b *Bot) OnError(fn func(error)) { b.handlers.OnError(fn) }
 
+// Updates returns a best-effort channel of updates. Updates admitted before
+// the first call are not replayed, and updates may be dropped if the buffer is
+// full; prefer handlers when delivery matters.
 func (b *Bot) Updates() <-chan Update {
 	b.updatesOn.Store(true)
 	return b.updatesCh
 }
 
+// ProcessUpdate parses a webhook payload (the full envelope, or a bare update
+// object) and admits it for asynchronous processing. It returns ErrQueueFull
+// or ErrStopped when the update cannot be admitted.
 func (b *Bot) ProcessUpdate(raw []byte) error {
 	u, err := decodeUpdateEnvelope(raw)
 	if err != nil {

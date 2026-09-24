@@ -38,7 +38,7 @@ func TestCallSuccessDecodesEnvelope(t *testing.T) {
 }
 
 func TestCallAPIErrorMapsCodeAndStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"ok":false,"error_code":401,"description":"Unauthorized"}`))
 	}))
@@ -46,30 +46,30 @@ func TestCallAPIErrorMapsCodeAndStatus(t *testing.T) {
 
 	c := NewClient("TOKEN", srv.URL, srv.Client())
 	_, err := c.Call(context.Background(), "getMe", map[string]any{})
-	var ae *APIError
+	var ae *Error
 	if !errors.As(err, &ae) {
-		t.Fatalf("err = %v (%T), want *APIError", err, err)
+		t.Fatalf("err = %v (%T), want *Error", err, err)
 	}
 	if ae.Code != 401 || ae.HTTPStatus != 401 || ae.Description != "Unauthorized" {
-		t.Fatalf("APIError = %+v", ae)
+		t.Fatalf("Error = %+v", ae)
 	}
 }
 
 func TestCallAcceptsCamelCaseErrorCode(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":false,"errorCode":426,"description":"quota"}`))
 	}))
 	defer srv.Close()
 	c := NewClient("TOKEN", srv.URL, srv.Client())
 	_, err := c.Call(context.Background(), "testWebhook", map[string]any{})
-	var ae *APIError
+	var ae *Error
 	if !errors.As(err, &ae) || ae.Code != 426 {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestCallHTMLBodyIsDecodeErrorWithStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`<html>unauthorized</html>`))
 	}))

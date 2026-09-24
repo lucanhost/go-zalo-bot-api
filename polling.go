@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// GetMe validates the bot token and returns basic information about the bot.
 func (b *Bot) GetMe(ctx context.Context) (*BotInfo, error) {
 	var info BotInfo
 	if err := b.call(ctx, "getMe", map[string]any{}, &info); err != nil {
@@ -15,6 +16,9 @@ func (b *Bot) GetMe(ctx context.Context) (*BotInfo, error) {
 	return &info, nil
 }
 
+// GetUpdates fetches pending updates via long polling. The result is decoded
+// tolerantly: an idle poll may be reported as a 408 error, which
+// IsPollingTimeout identifies.
 func (b *Bot) GetUpdates(ctx context.Context, o *GetUpdatesOptions) ([]Update, error) {
 	params := map[string]any{}
 	if o != nil && o.Timeout > 0 {
@@ -27,6 +31,11 @@ func (b *Bot) GetUpdates(ctx context.Context, o *GetUpdatesOptions) ([]Update, e
 	return decodeUpdates(raw)
 }
 
+// Start begins receiving updates via long polling and returns once the loop is
+// launched. Cancelling ctx, or calling Stop or Shutdown, stops it and closes
+// Done. Start returns ErrStopped, ErrAlreadyPolling, a ValidationError for an
+// unsuitable HTTP client, or a WebhookActiveError when a webhook is registered
+// and WithAutoDeleteWebhook is false.
 func (b *Bot) Start(ctx context.Context) error {
 	b.mu.Lock()
 	if b.stopped {

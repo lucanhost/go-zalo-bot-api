@@ -2,6 +2,7 @@ package zalobot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -80,7 +81,7 @@ func TestDispatcherRejectedAdmissionDoesNotCreateQueue(t *testing.T) {
 	if err := d.admitNonBlocking(msgUpdate("accepted", "a")); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.admitNonBlocking(msgUpdate("rejected", "b")); err != ErrQueueFull {
+	if err := d.admitNonBlocking(msgUpdate("rejected", "b")); !errors.Is(err, ErrQueueFull) {
 		t.Fatalf("err = %v, want ErrQueueFull", err)
 	}
 	d.mu.Lock()
@@ -102,7 +103,7 @@ func TestDispatcherNonBlockingReturnsQueueFull(t *testing.T) {
 	deadline := time.After(time.Second)
 	for {
 		err := d.admitNonBlocking(msgUpdate("c1", "c"))
-		if err == ErrQueueFull {
+		if errors.Is(err, ErrQueueFull) {
 			break
 		}
 		if err != nil {
@@ -151,7 +152,7 @@ func TestDispatcherStopUnblocksAdmission(t *testing.T) {
 	d.stop()
 	select {
 	case err := <-errCh:
-		if err != ErrStopped {
+		if !errors.Is(err, ErrStopped) {
 			t.Fatalf("err = %v, want ErrStopped", err)
 		}
 	case <-time.After(time.Second):
@@ -211,7 +212,7 @@ func TestDispatcherFanoutDropsWithSingleError(t *testing.T) {
 	var on atomic.Bool
 	on.Store(true)
 	d := newDispatcher(dispatchConfig{workers: 1, quantum: 10, perChat: 16, maxBuffered: 64}, ch, &on, func(err error) {
-		if err == ErrUpdatesDropped {
+		if errors.Is(err, ErrUpdatesDropped) {
 			atomic.AddInt32(&drops, 1)
 		}
 	}, func(Update) {})
