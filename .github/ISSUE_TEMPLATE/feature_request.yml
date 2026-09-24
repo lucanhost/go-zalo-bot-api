@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest an improvement or new capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like the SDK to do? Include API sketches if helpful.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: input
+    id: docs
+    attributes:
+      label: Link to the relevant API documentation
+      description: If this maps to a Zalo Bot Platform endpoint or behavior.
+      placeholder: https://docs.zaloplatforms.com/docs/BOT/...
+    validations:
+      required: false

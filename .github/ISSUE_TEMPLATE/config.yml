@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Zalo Bot Platform documentation
+    url: https://docs.zaloplatforms.com/docs/BOT
+    about: Official API reference and guides.
+  - name: Security vulnerability
+    url: https://github.com/lucanhost/go-zalo-bot-api/security/advisories/new
+    about: Please report security issues privately, not as public issues.

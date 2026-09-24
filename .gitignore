@@ -1,1 +1,20 @@
+# Worktrees and agent scratch
 .worktrees/
+.pi/
+
+# Test and coverage artifacts
+coverage.out
+coverage.txt
+coverage.html
+*.cover
+*.test
+
+# Build output
+/bin/
+/dist/
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp

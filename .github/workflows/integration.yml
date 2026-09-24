@@ -1,0 +1,23 @@
+name: Integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: live suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Run live integration suite
+        env:
+          ZALO_BOT_TOKEN: ${{ secrets.ZALO_BOT_TOKEN }}
+        run: go test -tags integration -run TestLive -v -timeout 5m ./...
