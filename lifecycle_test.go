@@ -38,6 +38,23 @@ func TestShutdownFromHandlerReturnsPromptly(t *testing.T) {
 	}
 }
 
+func TestHandlerCtxCanceledAfterGracefulStop(t *testing.T) {
+	b, err := New("TOKEN", WithWorkers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlerCtx := b.handlerCtx
+
+	if err := b.Stop(); err != nil {
+		t.Fatalf("Stop() = %v, want nil", err)
+	}
+	select {
+	case <-handlerCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("handler context was not canceled after graceful stop")
+	}
+}
+
 func TestDoneWaitsForHandlerThatIgnoresCancellation(t *testing.T) {
 	b, _ := New("TOKEN", WithWorkers(1), WithDrainTimeout(20*time.Millisecond))
 	var release atomic.Bool

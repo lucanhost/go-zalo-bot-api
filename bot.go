@@ -148,6 +148,7 @@ func (b *Bot) finishShutdown(ctx context.Context) error {
 	}()
 	select {
 	case <-waited:
+		b.handlerCancel()
 		b.closeSignals()
 		return nil
 	case <-ctx.Done():
