@@ -25,7 +25,7 @@ In scope:
 
 ## 2. Non-goals (YAGNI)
 
-- No multipart/file upload; the API takes URLs/IDs, not binary uploads.
+- No multipart/file upload in v1: the current documented methods take URLs/IDs, not binary uploads. (The platform lists `multipart/form-data` as an accepted encoding, so this is a future addition, not a platform limitation.)
 - No automatic retry on API errors (polling backoff only).
 - No offset persistence; `offset`/`limit` are not sent in v1 pending live verification.
 - No logger abstraction; `OnError` plus `slog.Default()` as the default sink.
@@ -41,7 +41,7 @@ go-zalo-bot-api/
 ├── go.mod
 ├── bot.go          // package zalobot: Bot, New, Option, Start/Shutdown/Stop/Done/Err
 ├── handlers.go     // OnMessage, OnText, OnCommand, OnEvent, OnError, Updates, ProcessUpdate
-├── dispatcher.go   // unexported: intake, router, per-chat queues, workers, fan-out
+├── dispatcher.go   // unexported: admission, per-chat queues, worker pool, fan-out
 ├── send.go         // SendMessage/Photo/Sticker/Voice/ChatAction
 ├── webhook.go      // WebhookHandler, VerifyWebhookSecret, SetWebhook, DeleteWebhook, GetWebhookInfo, TestWebhook
 ├── update.go       // Update, Message, User, Chat, BotInfo, EventName, ChatType
@@ -83,10 +83,10 @@ func (b *Bot) Updates() <-chan Update
 func (b *Bot) ProcessUpdate(raw []byte) error
 
 // Sending
-func (b *Bot) SendMessage(ctx context.Context, chatID, text string, o *SendMessageOptions) (*Message, error)
-func (b *Bot) SendPhoto(ctx context.Context, chatID, photo string, o *SendPhotoOptions) (*Message, error)
-func (b *Bot) SendSticker(ctx context.Context, chatID, sticker string) (*Message, error)
-func (b *Bot) SendVoice(ctx context.Context, chatID, voiceURL string) (*Message, error)
+func (b *Bot) SendMessage(ctx context.Context, chatID, text string, o *SendMessageOptions) (*SentMessage, error)
+func (b *Bot) SendPhoto(ctx context.Context, chatID, photo string, o *SendPhotoOptions) (*SentMessage, error)
+func (b *Bot) SendSticker(ctx context.Context, chatID, sticker string) (*SentMessage, error)
+func (b *Bot) SendVoice(ctx context.Context, chatID, voiceURL string) (*SentMessage, error)
 func (b *Bot) SendChatAction(ctx context.Context, chatID string, action ChatAction) error
 
 // Info + webhook
@@ -110,7 +110,6 @@ func VerifyWebhookSecret(got, want string) bool // false when want == ""
 | `WithPolling(PollingOptions{Timeout time.Duration})` | 30s | Long-poll timeout. |
 | `WithWorkers(int)` | 4 | Max chats processed concurrently. |
 | `WithUpdatesBuffer(int)` | 64 | `Updates()` channel capacity. |
-| `WithIntakeBuffer(int)` | 1024 | Global intake capacity. |
 | `WithPerChatBuffer(int)` | 512 | Per-chat queue capacity. |
 | `WithMaxBuffered(int)` | 10000 | Global queued-update ceiling. |
 | `WithDrainTimeout(time.Duration)` | 10s | Bounds `Stop()`/`Shutdown` drain. |
@@ -137,19 +136,18 @@ const (
 type User struct {
     ID          string `json:"id"`
     DisplayName string `json:"display_name"`
-    Name        string `json:"name"`   // tolerant: some clients report `name`
     Avatar      string `json:"avatar"`
     IsBot       bool   `json:"is_bot"`
 }
-// Custom UnmarshalJSON normalizes DisplayName: prefer `display_name`, else `name`.
+// Custom UnmarshalJSON normalizes DisplayName: `display_name`, else `name`.
 
-type BotInfo struct { // lenient: account_name or name
+type BotInfo struct {
     ID            string `json:"id"`
     AccountName   string `json:"account_name"`
-    Name          string `json:"name"`
     AccountType   string `json:"account_type"`
     CanJoinGroups bool   `json:"can_join_groups"`
 }
+// Custom UnmarshalJSON normalizes AccountName: `account_name`, else `name`.
 
 type Chat struct {
     ID   string   `json:"id"`
@@ -160,8 +158,7 @@ type Message struct {
     From        *User  `json:"from"`
     Chat        *Chat  `json:"chat"`
     Text        string `json:"text"`
-    Photo       string `json:"photo"`
-    PhotoURL    string `json:"photo_url"` // tolerant alternative
+    Photo       string `json:"photo"` // normalized: `photo`, else `photo_url`
     Caption     string `json:"caption"`
     Sticker     string `json:"sticker"`
     URL         string `json:"url"` // sticker URL
@@ -170,14 +167,22 @@ type Message struct {
     MessageID   string `json:"message_id"`
     Date        int64  `json:"date"` // epoch milliseconds
 }
-func (m *Message) Time() time.Time     // Date ms -> time.Time
-func (m *Message) ImageURL() string    // Photo, else PhotoURL
+// Custom UnmarshalJSON normalizes Photo: `photo`, else `photo_url`.
+func (m *Message) Time() time.Time // Date ms -> time.Time
 
 type Update struct {
-    EventName EventName
-    Message   *Message
-    Raw       json.RawMessage // copy of the decoded result object
+    EventName EventName       `json:"event_name"`
+    Message   *Message        `json:"message"`
+    Raw       json.RawMessage `json:"-"` // fresh copy of the decoded result object
 }
+// Custom UnmarshalJSON sets EventName/Message and copies Raw, so `event_name`
+// decoding is centralized and never depends on a stray struct tag.
+
+type SentMessage struct { // result of a send* call
+    MessageID string `json:"message_id"`
+    Date      int64  `json:"date"` // epoch milliseconds
+}
+func (s *SentMessage) Time() time.Time
 
 type ParseMode string
 const (
@@ -212,7 +217,7 @@ type WebhookTestResult struct {
 }
 ```
 
-`SendMessageOptions{ ParseMode ParseMode; TextStyles []TextStyle }`. `SendPhotoOptions{ Caption string }`. `SendSticker` and `SendVoice` take no options (the docs define none; voice explicitly has no caption). Send results decode to `*Message` (`MessageID`, `Date`). `SendChatAction` returns only `error` (its response has no `result`).
+`SendMessageOptions{ ParseMode ParseMode; TextStyles []TextStyle }`. `SendPhotoOptions{ Caption string }`. `SendSticker` and `SendVoice` take no options (the docs define none; voice explicitly has no caption). Send results decode to `*SentMessage` (`MessageID`, `Date`) — a distinct receipt type, never a partially populated inbound `*Message`. `SendChatAction` returns only `error` (its response has no `result`).
 
 Unknown JSON fields are preserved (no `DisallowUnknownFields`); `Update.Raw` is a fresh copy, never a slice into a reused buffer.
 
@@ -238,10 +243,13 @@ type WebhookActiveError struct { URL string } // Error() reports the active URL
 
 var ErrNoToken, ErrStopped, ErrAlreadyPolling, ErrQueueFull error
 
-func IsUnauthorized(err error) bool   // APIError 401
-func IsRateLimited(err error) bool    // 429 or 426
-func IsPollingTimeout(err error) bool // 408
+func IsUnauthorized(err error) bool         // 401 by API code or HTTP status
+func IsRateLimited(err error) bool          // 429 by API code or HTTP status
+func IsPollingTimeout(err error) bool       // 408 by API code or HTTP status
+func IsWebhookQuotaExceeded(err error) bool // 426 (testWebhook daily quota)
 ```
+
+- **Predicates consider HTTP status too.** They inspect `APIError.Code` *and* the HTTP status carried by `APIError`/`DecodeError`, so a 401/429 returned with a non-JSON body (e.g. an HTML error page from a proxy) is still classified correctly. 426 is modeled separately as the `testWebhook` daily-quota case, not as general rate limiting.
 
 - **Token redaction:** `TransportError` wraps `urlErr.Err` (never the `*url.Error` itself) and stores a redacted URL (`…/bot<TOKEN>/sendMessage`). This keeps `errors.Is(err, context.DeadlineExceeded)` and `net.Error.Timeout()` working with no token leak.
 - **HTTP status fallback:** when the body carries no code, `HTTPStatus` is used (e.g. a 502 HTML page from a proxy).
@@ -251,41 +259,62 @@ func IsPollingTimeout(err error) bool // 408
 
 ## 7. Dispatcher & concurrency
 
-The dispatcher is owned by the `Bot`, started lazily on first enqueue, and torn down by shutdown — independent of polling. A webhook-only bot never calls `Start` and still runs handlers.
+The dispatcher is owned by the `Bot`, started lazily on first admission, and torn down by shutdown — independent of polling. A webhook-only bot never calls `Start` and still runs handlers.
 
-**Pipeline:** `enqueue → intake (global, bounded) → router goroutine → per-chat queue (bounded) → drainer goroutine (one per chat, serial) → handlers → Updates() fan-out`.
+**Admission is synchronous into the target per-chat queue.** There is no intermediate buffer that can drop an already-accepted update. When admission returns `nil`, the update will be delivered to handlers unless the bot shuts down. (The separate `Updates()` channel is best-effort; see below.)
 
-- **Per-chat serial queues** give real isolation: same `chat.id` always maps to the same queue, preserving order; different chats run concurrently. There are no hash-shard collisions.
-- **Drainers** are limited by a semaphore of `WithWorkers` (default 4). A chat with a non-empty queue and no active drainer gets one; the drainer runs until the queue is empty, then reaps the entry and releases the semaphore.
-- **Isolation guarantee:** a slow chat can fill only its own `WithPerChatBuffer`. The router keeps consuming intake, dropping that chat's overflow with one `OnError` per overflow episode, so other chats and the poll loop never stall. A global `WithMaxBuffered` ceiling bounds total memory across all chats.
+`admit(u Update, blocking bool) error`:
 
-**Enqueue contracts:**
+1. Lock. If stopped → `ErrStopped`.
+2. Key = `chat.id`, or `"event:" + eventName` when there is no chat.
+3. If the per-chat queue is at `WithPerChatBuffer`, or `totalQueued` is at `WithMaxBuffered`:
+   - `blocking` (poll loop): wait on a condition variable until space frees or the bot stops.
+   - non-blocking (webhook / `ProcessUpdate`): return `ErrQueueFull`.
+4. Append, increment `totalQueued`, mark the chat ready if not already, `Broadcast()`.
+5. Unlock.
 
-| Path | Behavior | Errors |
+**Scheduler: a fixed, bounded worker pool.** Exactly `WithWorkers` (default 4) long-lived goroutines wait on a `sync.Cond` for ready chats, pop the **oldest** ready chat (FIFO fairness), mark it active, and drain it serially. When its queue empties the chat is marked inactive and the worker returns to the pool. No per-chat goroutine is ever spawned, so goroutine count is bounded by `WithWorkers`.
+
+- **Per-chat serial queues** preserve order within a chat (same `chat.id` → same queue).
+- **N workers** process N different chats concurrently.
+- **No hash sharding**, so unrelated chats never collide.
+
+**Admission contracts:**
+
+| Path | Admission | Errors |
 |---|---|---|
-| `ProcessUpdate` (public) | non-blocking | `ErrQueueFull`, `ErrStopped` |
-| `WebhookHandler` | calls `ProcessUpdate`; both errors → HTTP 503 | — |
-| Poll loop | blocking, `select` on intake send / shutdown / ctx | `ErrStopped`, `ctx.Err()` |
+| `ProcessUpdate` (public) | non-blocking per-chat | `ErrQueueFull`, `ErrStopped` |
+| `WebhookHandler` | calls `ProcessUpdate`; **returns 200 only after successful admission**, else 503 | — |
+| Poll loop | blocking per-chat, waits on the condition, aborts on stop/ctx | `ErrStopped`, `ctx.Err()` |
 
-**No queue/worker channels are closed to signal shutdown.** Queues are slices guarded by a mutex; an atomic `stopped` flag makes enqueue return `ErrStopped`. This eliminates send-on-closed-channel panics when a webhook request races shutdown. Only the two signalling channels — `Updates()` and `Done()` — are closed, once, at the very end of shutdown.
+**Backpressure and isolation (honest statement).** Different chats are processed in parallel and per-chat order is preserved. A chat whose queue is full applies backpressure to the **poll loop**, which admits one update at a time; already-admitted updates for other chats continue to be processed by the worker pool. Webhook requests targeting a full chat receive an explicit **503**, never a false 200. No admitted update is silently dropped before handler delivery.
+
+**No queue/worker channels are closed to signal shutdown.** Queues are slices guarded by a mutex and a condition variable; an atomic `stopped` flag makes admission return `ErrStopped`. This eliminates send-on-closed-channel panics when a webhook request races shutdown. Only the two signalling channels — `Updates()` and `Done()` — are closed, once, at the very end of shutdown.
 
 **Handler context.** Handlers receive a bot-lifetime `handlerCtx`, cancelled only when the drain completes or its deadline passes, so in-flight handlers can still send replies during shutdown.
 
 **Shutdown semantics (`Shutdown(ctx)`, idempotent):**
 
-1. Set stopped; stop accepting new updates.
-2. Let the router and drainers finish queued work.
+1. Set stopped; `Broadcast()` to wake blocked admitters and idle workers.
+2. Let workers finish queued work.
 3. Wait for workers `select`-ed against `ctx`.
 4. On deadline: cancel `handlerCtx`; return `ctx.Err()`.
 5. Close `Updates()`; close `Done()`.
 
 `handlerCtx` carries a private marker value. If `Shutdown` receives a context carrying that marker (i.e. it was called from inside a handler), it initiates shutdown and **returns immediately**; the caller waits on `Done()`. This prevents the self-deadlock where a handler waits for the drain that is waiting for it. `Stop()` is `Shutdown(context.Background())` bounded by `WithDrainTimeout`; from a handler, prefer `Shutdown(ctx)`.
 
-`Err()` is the terminal error (e.g. a fatal 401) and is **nil after a graceful stop**; a drain-timeout is reported by `Shutdown`'s return value, not `Err()`.
+`Done()` closes **only when the bot is fully stopped** — after a graceful `Stop`/`Shutdown` *and* after a fatal polling error, which runs the same shutdown sequence. `Err()` returns the terminal error (e.g. a fatal 401) and is **nil after a graceful stop**; a drain-timeout is reported by `Shutdown`'s return value, not `Err()`.
 
-**`Updates()` semantics:** a separate fan-out channel, buffered (`WithUpdatesBuffer`, default 64). It is **lazy** — only filled after `Updates()` is first called; earlier updates are not replayed. Both handlers and channel consumers see every update. When full, an update is dropped **for channel consumers only** (handlers still run) with one `OnError` per full-buffer episode. Closed by shutdown even if never read.
+**Handler ordering, multiple handlers, panics, registration.**
 
-**Shared message safety:** handlers and channel consumers receive the same `*Message`; it is decoded once and never mutated, so it must be treated as read-only.
+- Per update, handlers run in this order: `OnEvent(name)` → `OnMessage` → `OnText` (every matching regexp) → `OnCommand` (every matching command). Within a category, registration order.
+- All matching handlers run; there is no first-match-wins and no suppression.
+- Each handler invocation is wrapped in `recover`; a panic is reported via `OnError` with the stack, and the remaining handlers for that update still run.
+- Registration is mutex-guarded and safe at any time, but a handler registered after an update was admitted may or may not see that update. Register before `Start` for deterministic behavior.
+
+**`Updates()` semantics (best-effort).** A separate fan-out channel, buffered (`WithUpdatesBuffer`, default 64). It is **lazy** — only filled after `Updates()` is first called; updates admitted before that are **not replayed**. It may drop updates when full (one `OnError` per full-buffer episode); drops affect the channel only, never handler delivery. Closed by shutdown even if never read.
+
+**Shared message safety.** Handlers and channel consumers receive the same `*Message`; it is decoded once and never mutated, so it must be treated as read-only.
 
 ## 8. Polling
 
@@ -294,14 +323,14 @@ The dispatcher is owned by the `Bot`, started lazily on first enqueue, and torn 
 1. `ErrStopped` if already stopped; `ErrAlreadyPolling` if running.
 2. If `WithAutoDeleteWebhook(true)` → `DeleteWebhook`; otherwise `GetWebhookInfo` and, if `URL != ""`, return `WebhookActiveError{URL}` **without touching it**.
 3. Validate the HTTP client timeout (see §6).
-4. Launch the loop: `GetUpdates(ctx, {Timeout})` → enqueue each update (blocking, shutdown-aware). A watcher goroutine runs the same idempotent shutdown when `ctx` is cancelled.
+4. Launch the loop: `GetUpdates(ctx, {Timeout})` → admit each update (blocking, shutdown-aware). A watcher goroutine runs the same idempotent shutdown when `ctx` is cancelled.
 
 `Start` returns `nil` once the loop is launched; it does not block. Setup failures (steps 1–3) are returned synchronously. Runtime failures are reported through `OnError`, `Err()`, and `Done()`.
 
 Loop error handling:
 
 - **408** (`IsPollingTimeout`) is a **normal empty poll**: no `OnError`, no backoff, continue.
-- **401** (`IsUnauthorized`) is **fatal only for the poll loop**: stop, record `Err()`, fire `OnError`, close `Done()`. A 401 from a `sendMessage` call just returns an `*APIError` and does not stop the bot.
+- **401** (`IsUnauthorized`) is **fatal only for the poll loop**: it triggers the full shutdown sequence (stop admitting, drain, close `Updates()`, close `Done()`), with `Err()` set to the 401, so `Done()` always means fully stopped. A 401 from a `sendMessage` call just returns an `*APIError` and does not stop the bot.
 - Other errors: `OnError` + exponential backoff with **jitter**, **reset on success**, and a **longer base on 429**.
 - **Tight-loop guard:** if an empty `ok` poll or a 408 returns in under 1s, sleep briefly before the next request.
 - **Periodic webhook re-check:** after N consecutive empty polls (default 30), call `GetWebhookInfo`; if a webhook has appeared, stop with `WebhookActiveError`. Guards against another process enabling a webhook after `Start` (verification checklist item 6).
@@ -322,11 +351,11 @@ Request handling order:
 2. `X-Bot-Api-Secret-Token` compared with `VerifyWebhookSecret` (`crypto/subtle`, constant time) → **403** on mismatch. `VerifyWebhookSecret` returns false when `want == ""`.
 3. `http.MaxBytesReader` (1 MiB) → **413** if exceeded.
 4. Parse envelope; also accept a bare update object when it has a top-level `event_name` → **400** on malformed input.
-5. `ProcessUpdate` (non-blocking enqueue) → **503** on `ErrQueueFull`/`ErrStopped`, else **200** `{"ok":true}` immediately.
+5. `ProcessUpdate` (non-blocking admission) → **503** on `ErrQueueFull`/`ErrStopped`, else **200** `{"ok":true}` immediately.
 
 Handlers run asynchronously after the 200 (the docs call out slow endpoints as a cause of `webhook.err.unreachable`; redirects are never followed). `WebhookHandler` owns no TLS/redirect logic; it is mounted on the caller's server.
 
-`ProcessUpdate(raw []byte) error` takes the **full envelope body**, unwraps `result`, enqueues, and returns parse/queue errors. It never dispatches on the caller's goroutine, so ordering guarantees hold and handlers cannot race polled updates. `Updates()` sees webhook updates.
+`ProcessUpdate(raw []byte) error` takes the **full envelope body**, unwraps `result`, admits it, and returns parse/queue errors. It never dispatches on the caller's goroutine, so ordering guarantees hold and handlers cannot race polled updates. `Updates()` sees webhook updates.
 
 Client methods: `SetWebhook(ctx, url, secret)` validates https and an 8–256-char secret, returns `*WebhookInfo` with `Verification`; a failed verification is **not** an error (the URL is saved regardless). `DeleteWebhook`, `GetWebhookInfo`, `TestWebhook` return their typed results.
 
@@ -352,12 +381,16 @@ Client methods: `SetWebhook(ctx, url, secret)` validates https and an 8–256-ch
 
 - `internal/api` (`httptest`): URL/method/header/body assertions; envelope decode including the `errorCode` alias; tolerant `getUpdates` decode (array / object / null / absent); error mapping and token redaction.
 - Root, against a fake server: send methods; validation errors; `OnText` matching; handler ordering; nil-message event; polling fetch→cancel→`Stop`; webhook (405/403/400/413/200, async dispatch).
+- **Normalized decoding**: `display_name` vs `name`, `photo` vs `photo_url`, `account_name` vs `name`; `SentMessage` decoding; `Update.EventName`/`Raw` decoding.
 - **Golden fixtures** from the docs samples: the webhook payload, `setWebhook` `verification`, the `testWebhook` 403 hint, and `sendChatAction`'s `{"ok":true}` with no `result`.
-- **408** (no `OnError`, no backoff) and **401** (loop exits, `Err()` set) tests.
-- **Queue-full** tests for polling and webhook; `ProcessUpdate` returning `ErrQueueFull`/`ErrStopped`.
-- **Stress test** of enqueue racing `Shutdown` under `-race`.
-- `Shutdown` called from a handler returns promptly.
-- A **slow-chat isolation** test demonstrating that a stalled chat does not delay others.
+- **408** (no `OnError`, no backoff) and **401** (full shutdown, `Done()` closes, `Err()` set) tests.
+- **Predicates with invalid JSON bodies**: a 401/429 returned as an HTML error page is still classified by `IsUnauthorized`/`IsRateLimited`; 426 maps to `IsWebhookQuotaExceeded`.
+- **Queue-full** tests: `ProcessUpdate` returns `ErrQueueFull`/`ErrStopped`; polling blocks and resumes; the webhook returns **503 and never a false 200**.
+- **Scheduler fairness**: ready chats are served FIFO, and a chat made ready earlier is picked before one made ready later.
+- **Goroutine bound**: under sustained load, worker goroutines stay at `WithWorkers` (checked with `goleak`/`runtime.NumGoroutine`).
+- **Stress test** of admission racing `Shutdown` under `-race`.
+- `Shutdown` called from a handler returns promptly; **concurrent handler registration** while updates dispatch passes under `-race`.
+- A **slow-chat** test demonstrating that a stalled chat does not stop other chats' already-admitted updates from processing (the poll loop applies backpressure).
 - **`goleak`** (test-only dependency) around `Start`/`Stop`/ctx-cancel/`Shutdown`.
 - **Fuzz/property** test for `StyleRange`: slicing the UTF-16 encoding of the text at `start:start+len` must decode back to `substr`. Include Vietnamese in **NFC and NFD** (different UTF-16 lengths) and emoji (surrogate pairs).
 - A `//go:build integration` suite gated on `ZALO_BOT_TOKEN` that runs the live-verification checklist.
@@ -380,6 +413,7 @@ Run via the integration suite once a token is available:
 - The `getUpdates` response shape and `timeout` type are unverified; §8 decodes tolerantly and sends a string.
 - Group-chat behavior is beta and lightly documented.
 - Without an ack/offset, in-flight polls can drop updates on shutdown.
+- A full per-chat queue applies backpressure to the poll loop by design; webhook deployments avoid it and get an explicit 503 instead.
 
 ## 14. References
 
