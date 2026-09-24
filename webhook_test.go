@@ -70,6 +70,21 @@ func TestWebhookHandlerOrderAndAsyncDispatch(t *testing.T) {
 	b.disp.wait()
 }
 
+func TestWebhookHandlerPayloadTooLargeIs413(t *testing.T) {
+	b, _ := New("TOKEN")
+	h, err := b.WebhookHandler("secret-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("x", (1<<20)+1)))
+	req.Header.Set("X-Bot-Api-Secret-Token", "secret-123")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("code = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
 func TestWebhookHandlerBadJSONIs400(t *testing.T) {
 	b, _ := New("TOKEN")
 	h, _ := b.WebhookHandler("secret-123")
