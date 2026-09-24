@@ -45,7 +45,7 @@ func (c *Client) Call(ctx context.Context, method string, params any) (json.RawM
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL(method), body)
 	if err != nil {
-		return nil, &TransportError{Method: method, RedactedURL: c.RedactedURL(method), Err: err}
+		return nil, &TransportError{Method: method, RedactedURL: c.RedactedURL(method), Err: unwrapURLErr(err)}
 	}
 	if params != nil {
 		req.Header.Set("Content-Type", "application/json")

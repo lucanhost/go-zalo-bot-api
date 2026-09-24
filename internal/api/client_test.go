@@ -85,6 +85,18 @@ func TestCallHTMLBodyIsDecodeErrorWithStatus(t *testing.T) {
 	}
 }
 
+func TestCallRequestConstructionErrorRedactsToken(t *testing.T) {
+	c := NewClient("BAD\nTOKEN", "http://example.com", &http.Client{})
+	_, err := c.Call(context.Background(), "getMe", map[string]any{})
+	var te *TransportError
+	if !errors.As(err, &te) {
+		t.Fatalf("err = %v (%T), want *TransportError", err, err)
+	}
+	if strings.Contains(err.Error(), "BAD") || strings.Contains(err.Error(), "BAD\nTOKEN") {
+		t.Fatalf("token leaked: %v", err)
+	}
+}
+
 func TestTransportErrorRedactsTokenAndKeepsCause(t *testing.T) {
 	c := NewClient("SECRET", "http://127.0.0.1:1", &http.Client{})
 	_, err := c.Call(context.Background(), "getMe", map[string]any{})
