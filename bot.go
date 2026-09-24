@@ -106,3 +106,63 @@ func (b *Bot) setErr(err error) {
 }
 
 func (b *Bot) IsPolling() bool { return b.polling.Load() }
+
+func (b *Bot) Shutdown(ctx context.Context) error {
+	b.mu.Lock()
+	if b.stopped {
+		b.mu.Unlock()
+		return nil
+	}
+	b.stopped = true
+	cancel := b.pollCancel
+	b.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	b.disp.stop()
+
+	if ctx.Value(handlerCtxKey{}) != nil {
+		go func() {
+			dctx, dcancel := context.WithTimeout(context.Background(), b.cfg.drainTimeout)
+			defer dcancel()
+			_ = b.finishShutdown(dctx)
+		}()
+		return nil
+	}
+	return b.finishShutdown(ctx)
+}
+
+func (b *Bot) Stop() error {
+	ctx, cancel := context.WithTimeout(context.Background(), b.cfg.drainTimeout)
+	defer cancel()
+	return b.Shutdown(ctx)
+}
+
+func (b *Bot) finishShutdown(ctx context.Context) error {
+	waited := make(chan struct{})
+	go func() {
+		b.wg.Wait()
+		b.disp.wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+		b.closeSignals()
+		return nil
+	case <-ctx.Done():
+		b.handlerCancel()
+		go func() {
+			<-waited
+			b.closeSignals()
+		}()
+		return ctx.Err()
+	}
+}
+
+func (b *Bot) closeSignals() {
+	b.closeOnce.Do(func() {
+		close(b.updatesCh)
+		close(b.done)
+	})
+}
