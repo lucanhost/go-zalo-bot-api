@@ -48,6 +48,6 @@ jobs:
           # golangci-lint v2.12.x is built with Go 1.26 and cannot load a
           # Go 1.27 standard library, so pin the toolchain the linter runs on.
           go-version: "1.26.x"
-      - uses: golangci/golangci-lint-action@v7
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
