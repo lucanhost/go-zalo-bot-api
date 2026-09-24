@@ -107,6 +107,9 @@ func (b *Bot) setErr(err error) {
 
 func (b *Bot) IsPolling() bool { return b.polling.Load() }
 
+// Shutdown stops the bot and waits for the drain or ctx deadline. If shutdown is
+// already in progress, it returns nil immediately; callers that need to wait for
+// completion must wait on Done().
 func (b *Bot) Shutdown(ctx context.Context) error {
 	b.mu.Lock()
 	if b.stopped {
@@ -133,6 +136,9 @@ func (b *Bot) Shutdown(ctx context.Context) error {
 	return b.finishShutdown(ctx)
 }
 
+// Stop initiates shutdown with the configured drain timeout. If shutdown is
+// already in progress, it returns nil immediately; callers that need to wait for
+// completion must wait on Done().
 func (b *Bot) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), b.cfg.drainTimeout)
 	defer cancel()

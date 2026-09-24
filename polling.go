@@ -101,14 +101,14 @@ func (b *Bot) pollLoop(ctx context.Context) {
 			}
 			if IsPollingTimeout(err) {
 				empty++
-				stop, checked := b.recheckWebhook(ctx, empty)
-				if checked {
+				stop, attempted := b.recheckWebhook(ctx, empty)
+				if attempted {
 					empty = 0
 				}
 				if stop {
 					return
 				}
-				sleepRemainder(started, b.cfg.pollTimeout)
+				sleepRemainder(ctx, b.done, started, b.cfg.pollTimeout)
 				continue
 			}
 			if IsUnauthorized(err) {
@@ -142,14 +142,14 @@ func (b *Bot) pollLoop(ctx context.Context) {
 		backoff = time.Second
 		if len(updates) == 0 {
 			empty++
-			stop, checked := b.recheckWebhook(ctx, empty)
-			if checked {
+			stop, attempted := b.recheckWebhook(ctx, empty)
+			if attempted {
 				empty = 0
 			}
 			if stop {
 				return
 			}
-			sleepRemainder(started, b.cfg.pollTimeout)
+			sleepRemainder(ctx, b.done, started, b.cfg.pollTimeout)
 			continue
 		}
 		empty = 0
@@ -161,13 +161,13 @@ func (b *Bot) pollLoop(ctx context.Context) {
 	}
 }
 
-func (b *Bot) recheckWebhook(ctx context.Context, empty int) (stop, checked bool) {
+func (b *Bot) recheckWebhook(ctx context.Context, empty int) (stop, attempted bool) {
 	if empty < 30 {
 		return false, false
 	}
 	info, err := b.GetWebhookInfo(ctx)
 	if err != nil {
-		return false, false
+		return false, true
 	}
 	if info.URL != "" {
 		werr := &WebhookActiveError{URL: info.URL}
@@ -185,12 +185,18 @@ func (b *Bot) isStopped() bool {
 	return b.stopped
 }
 
-func sleepRemainder(started time.Time, interval time.Duration) {
+func sleepRemainder(ctx context.Context, done <-chan struct{}, started time.Time, interval time.Duration) {
 	if interval > time.Second {
 		interval = time.Second
 	}
 	if d := interval - time.Since(started); d > 0 {
-		time.Sleep(d)
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+		case <-done:
+		case <-timer.C:
+		}
 	}
 }
 

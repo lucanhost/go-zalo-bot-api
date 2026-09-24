@@ -32,6 +32,8 @@ func VerifyWebhookSecret(got, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
+// WebhookHandler validates the secret length in bytes (8..256); ASCII secrets
+// behave as character counts, while non-ASCII secrets may count differently.
 func (b *Bot) WebhookHandler(secret string) (http.Handler, error) {
 	if n := len(secret); n < 8 || n > 256 {
 		return nil, &ValidationError{Field: "secret", Reason: "must be 8..256 characters"}
@@ -66,6 +68,8 @@ func (b *Bot) WebhookHandler(secret string) (http.Handler, error) {
 	}), nil
 }
 
+// SetWebhook validates the secret length in bytes (8..256); ASCII secrets
+// behave as character counts, while non-ASCII secrets may count differently.
 func (b *Bot) SetWebhook(ctx context.Context, rawURL, secret string) (*WebhookInfo, error) {
 	if !strings.HasPrefix(rawURL, "https://") {
 		return nil, &ValidationError{Field: "url", Reason: "must be an https URL"}

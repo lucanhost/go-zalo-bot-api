@@ -62,6 +62,49 @@ func TestPollingTreats408AsEmptyPoll(t *testing.T) {
 	}
 }
 
+func TestPollingWebhookRecheckFailuresAreThrottled(t *testing.T) {
+	var updateCalls, webhookCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/botTOKEN/getWebhookInfo":
+			if webhookCalls.Add(1) == 1 {
+				_, _ = w.Write([]byte(`{"ok":true,"result":{"url":""}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ok":false,"error_code":500,"description":"temporary failure"}`))
+		case "/botTOKEN/getUpdates":
+			updateCalls.Add(1)
+			_, _ = w.Write([]byte(`{"ok":true,"result":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	b, err := New("TOKEN", WithBaseURL(srv.URL), WithHTTPClient(srv.Client()),
+		WithPolling(PollingOptions{Timeout: time.Millisecond}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := b.Start(ctx); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+	select {
+	case <-b.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Done() did not close after cancellation")
+	}
+	if got := updateCalls.Load(); got < 60 {
+		t.Fatalf("only %d empty polls completed; want to exercise several re-check intervals", got)
+	}
+	if got := webhookCalls.Load(); got < 2 || got > 7 {
+		t.Fatalf("getWebhookInfo called %d times, want initial call plus throttled retries", got)
+	}
+}
+
 func TestPollingWebhookRecheckCancelledByShutdown(t *testing.T) {
 	var updates atomic.Int32
 	var webhookCalls atomic.Int32
