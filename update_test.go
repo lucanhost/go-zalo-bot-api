@@ -20,6 +20,24 @@ func TestUserNormalizesDisplayName(t *testing.T) {
 	}
 }
 
+func TestBotInfoNormalizesAccountName(t *testing.T) {
+	var fallback BotInfo
+	if err := json.Unmarshal([]byte(`{"id":"1","name":"Fallback"}`), &fallback); err != nil {
+		t.Fatal(err)
+	}
+	if fallback.AccountName != "Fallback" {
+		t.Fatalf("AccountName = %q, want %q", fallback.AccountName, "Fallback")
+	}
+
+	var preferred BotInfo
+	if err := json.Unmarshal([]byte(`{"id":"1","account_name":"Preferred","name":"Fallback"}`), &preferred); err != nil {
+		t.Fatal(err)
+	}
+	if preferred.AccountName != "Preferred" {
+		t.Fatalf("AccountName = %q, want %q", preferred.AccountName, "Preferred")
+	}
+}
+
 func TestMessageNormalizesPhotoAndTime(t *testing.T) {
 	var m Message
 	if err := json.Unmarshal([]byte(`{"photo_url":"https://x/y.jpg","date":1750316131602}`), &m); err != nil {
