@@ -84,14 +84,15 @@ func (d *dispatcher) admitLocked(u Update, ctx context.Context) error {
 			return ctx.Err()
 		}
 		cq := d.queues[key]
-		if cq == nil {
-			cq = &chatQueue{}
-			d.queues[key] = cq
-		}
-		if len(cq.items) < d.cfg.perChat && d.total < d.cfg.maxBuffered {
+		if (cq == nil || len(cq.items) < d.cfg.perChat) && d.total < d.cfg.maxBuffered {
+			if cq == nil {
+				cq = &chatQueue{}
+				d.queues[key] = cq
+			}
 			cq.items = append(cq.items, u)
 			d.total++
 			if !cq.active {
+				cq.active = true
 				d.ready = append(d.ready, key)
 				d.cond.Broadcast()
 			}

@@ -2,6 +2,7 @@ package zalobot
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -20,20 +21,34 @@ func msgUpdate(chat, text string) Update {
 }
 
 func TestDispatcherProcessesInOrderPerChat(t *testing.T) {
+	const chats, updates = 4, 24
 	var mu sync.Mutex
-	var got []string
+	got := make(map[string][]string, chats)
+	active := make(map[string]int, chats)
+	var completed int
 	done := make(chan struct{})
-	d, _ := newTestDispatcher(dispatchConfig{workers: 2, quantum: 1, perChat: 8, maxBuffered: 64}, func(u Update) {
+	d, _ := newTestDispatcher(dispatchConfig{workers: 4, quantum: 2, perChat: updates, maxBuffered: chats * updates}, func(u Update) {
+		key := u.Message.Chat.ID
 		mu.Lock()
-		got = append(got, u.Message.Text)
-		if len(got) == 3 {
+		active[key]++
+		if active[key] != 1 {
+			t.Errorf("concurrent processing for chat %s", key)
+		}
+		got[key] = append(got[key], u.Message.Text)
+		active[key]--
+		completed++
+		if completed == chats*updates {
 			close(done)
 		}
 		mu.Unlock()
 	})
-	for _, s := range []string{"1", "2", "3"} {
-		if err := d.admitNonBlocking(msgUpdate("c1", s)); err != nil {
-			t.Fatal(err)
+	// Admit all work before waiting so every chat has multiple ready/requeue
+	// turns while workers contend for the scheduler.
+	for i := 0; i < updates; i++ {
+		for c := 0; c < chats; c++ {
+			if err := d.admitNonBlocking(msgUpdate(fmt.Sprintf("c%d", c), fmt.Sprint(i))); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	select {
@@ -42,10 +57,37 @@ func TestDispatcherProcessesInOrderPerChat(t *testing.T) {
 		t.Fatal("timeout")
 	}
 	mu.Lock()
-	ok := got[0] == "1" && got[1] == "2" && got[2] == "3"
+	for c := 0; c < chats; c++ {
+		key := fmt.Sprintf("c%d", c)
+		if len(got[key]) != updates {
+			t.Errorf("chat %s got %d updates, want %d", key, len(got[key]), updates)
+			continue
+		}
+		for i, text := range got[key] {
+			if want := fmt.Sprint(i); text != want {
+				t.Errorf("chat %s update %d = %q, want %q", key, i, text, want)
+				break
+			}
+		}
+	}
 	mu.Unlock()
-	if !ok {
-		t.Fatalf("order = %v", got)
+	d.stop()
+	d.wait()
+}
+
+func TestDispatcherRejectedAdmissionDoesNotCreateQueue(t *testing.T) {
+	d, _ := newTestDispatcher(dispatchConfig{workers: 0, quantum: 1, perChat: 1, maxBuffered: 1}, func(Update) {})
+	if err := d.admitNonBlocking(msgUpdate("accepted", "a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.admitNonBlocking(msgUpdate("rejected", "b")); err != ErrQueueFull {
+		t.Fatalf("err = %v, want ErrQueueFull", err)
+	}
+	d.mu.Lock()
+	_, exists := d.queues["rejected"]
+	d.mu.Unlock()
+	if exists {
+		t.Fatal("rejected admission created an empty queue")
 	}
 	d.stop()
 	d.wait()
