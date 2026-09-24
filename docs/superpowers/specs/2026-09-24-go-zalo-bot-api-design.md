@@ -109,6 +109,7 @@ func VerifyWebhookSecret(got, want string) bool // false when want == ""
 | `WithBaseURL(string)` | `https://bot-api.zaloplatforms.com` | Override for tests/proxies. |
 | `WithPolling(PollingOptions{Timeout time.Duration})` | 30s | Long-poll timeout. |
 | `WithWorkers(int)` | 4 | Max chats processed concurrently. |
+| `WithQuantum(int)` | 1 | Updates processed per scheduler turn before the chat is requeued at the FIFO tail. |
 | `WithUpdatesBuffer(int)` | 64 | `Updates()` channel capacity. |
 | `WithPerChatBuffer(int)` | 512 | Per-chat queue capacity. |
 | `WithMaxBuffered(int)` | 10000 | Global queued-update ceiling. |
@@ -219,7 +220,7 @@ type WebhookTestResult struct {
 
 `SendMessageOptions{ ParseMode ParseMode; TextStyles []TextStyle }`. `SendPhotoOptions{ Caption string }`. `SendSticker` and `SendVoice` take no options (the docs define none; voice explicitly has no caption). Send results decode to `*SentMessage` (`MessageID`, `Date`) — a distinct receipt type, never a partially populated inbound `*Message`. `SendChatAction` returns only `error` (its response has no `result`).
 
-Unknown JSON fields are preserved (no `DisallowUnknownFields`); `Update.Raw` is a fresh copy, never a slice into a reused buffer.
+Unknown JSON fields are **tolerated/ignored** (no `DisallowUnknownFields`; standard struct decoding does not retain them). `Update.Raw` preserves the complete update object as a fresh copy, never a slice into a reused buffer.
 
 ## 6. Transport & errors
 
@@ -241,7 +242,7 @@ type DecodeError struct { Method string; HTTPStatus int; Err error } // Unwrap()
 type ValidationError struct { Field, Reason string }
 type WebhookActiveError struct { URL string } // Error() reports the active URL
 
-var ErrNoToken, ErrStopped, ErrAlreadyPolling, ErrQueueFull error
+var ErrNoToken, ErrStopped, ErrAlreadyPolling, ErrQueueFull, ErrSubstringNotFound error
 
 func IsUnauthorized(err error) bool         // 401 by API code or HTTP status
 func IsRateLimited(err error) bool          // 429 by API code or HTTP status
@@ -263,17 +264,22 @@ The dispatcher is owned by the `Bot`, started lazily on first admission, and tor
 
 **Admission is synchronous into the target per-chat queue.** There is no intermediate buffer that can drop an already-accepted update. When admission returns `nil`, the update will be delivered to handlers unless the bot shuts down. (The separate `Updates()` channel is best-effort; see below.)
 
-`admit(u Update, blocking bool) error`:
+Admission has two entry points:
+
+- `admitNonBlocking(u Update) error` — used by webhook / `ProcessUpdate`.
+- `admitBlocking(ctx context.Context, u Update) error` — used by the poll loop.
+
+Both:
 
 1. Lock. If stopped → `ErrStopped`.
 2. Key = `chat.id`, or `"event:" + eventName` when there is no chat.
 3. If the per-chat queue is at `WithPerChatBuffer`, or `totalQueued` is at `WithMaxBuffered`:
-   - `blocking` (poll loop): wait on a condition variable until space frees or the bot stops.
-   - non-blocking (webhook / `ProcessUpdate`): return `ErrQueueFull`.
+   - `admitNonBlocking`: return `ErrQueueFull`.
+   - `admitBlocking`: wait on the condition variable until space frees, the bot stops, or `ctx` is done. Cancellation is wired to wake the waiter (e.g. `context.AfterFunc(ctx, broadcast)`); on wake it re-checks stopped/`ctx.Err()` and returns `ErrStopped`/`ctx.Err()`.
 4. Append, increment `totalQueued`, mark the chat ready if not already, `Broadcast()`.
 5. Unlock.
 
-**Scheduler: a fixed, bounded worker pool.** Exactly `WithWorkers` (default 4) long-lived goroutines wait on a `sync.Cond` for ready chats, pop the **oldest** ready chat (FIFO fairness), mark it active, and drain it serially. When its queue empties the chat is marked inactive and the worker returns to the pool. No per-chat goroutine is ever spawned, so goroutine count is bounded by `WithWorkers`.
+**Scheduler: a fixed, bounded worker pool.** Exactly `WithWorkers` (default 4) long-lived goroutines wait on a `sync.Cond` for ready chats and pop the **oldest** ready chat. A worker processes a **bounded quantum** (`WithQuantum`, default 1) from that chat, then, if the queue is still non-empty, **re-appends the chat to the FIFO tail** and broadcasts; otherwise it marks the chat inactive. This prevents a continuously replenished chat from monopolizing a worker. No per-chat goroutine is ever spawned, so goroutine count is bounded by `WithWorkers`.
 
 - **Per-chat serial queues** preserve order within a chat (same `chat.id` → same queue).
 - **N workers** process N different chats concurrently.
@@ -289,7 +295,7 @@ The dispatcher is owned by the `Bot`, started lazily on first admission, and tor
 
 **Backpressure and isolation (honest statement).** Different chats are processed in parallel and per-chat order is preserved. A chat whose queue is full applies backpressure to the **poll loop**, which admits one update at a time; already-admitted updates for other chats continue to be processed by the worker pool. Webhook requests targeting a full chat receive an explicit **503**, never a false 200. No admitted update is silently dropped before handler delivery.
 
-**No queue/worker channels are closed to signal shutdown.** Queues are slices guarded by a mutex and a condition variable; an atomic `stopped` flag makes admission return `ErrStopped`. This eliminates send-on-closed-channel panics when a webhook request races shutdown. Only the two signalling channels — `Updates()` and `Done()` — are closed, once, at the very end of shutdown.
+**No queue/worker channels are closed to signal shutdown.** Queues are slices guarded by a mutex and a condition variable; an atomic `stopped` flag makes admission return `ErrStopped`. This eliminates send-on-closed-channel panics when a webhook request races shutdown. Only the two signalling channels — `Updates()` and `Done()` — are closed once, by the reaper, after workers have exited.
 
 **Handler context.** Handlers receive a bot-lifetime `handlerCtx`, cancelled only when the drain completes or its deadline passes, so in-flight handlers can still send replies during shutdown.
 
@@ -297,11 +303,13 @@ The dispatcher is owned by the `Bot`, started lazily on first admission, and tor
 
 1. Set stopped; `Broadcast()` to wake blocked admitters and idle workers.
 2. Let workers finish queued work.
-3. Wait for workers `select`-ed against `ctx`.
-4. On deadline: cancel `handlerCtx`; return `ctx.Err()`.
-5. Close `Updates()`; close `Done()`.
+3. Wait for workers, `select`-ed against `ctx`.
+4. On deadline: cancel `handlerCtx` and return `ctx.Err()`. A single background reaper then waits for workers to **actually exit** before closing `Updates()` and `Done()`.
+5. On clean exit: close `Updates()` and `Done()`.
 
-`handlerCtx` carries a private marker value. If `Shutdown` receives a context carrying that marker (i.e. it was called from inside a handler), it initiates shutdown and **returns immediately**; the caller waits on `Done()`. This prevents the self-deadlock where a handler waits for the drain that is waiting for it. `Stop()` is `Shutdown(context.Background())` bounded by `WithDrainTimeout`; from a handler, prefer `Shutdown(ctx)`.
+`Done()` therefore always means *fully stopped*: it may be delayed by a handler that ignores cancellation, but it never closes while a handler is still running.
+
+`handlerCtx` carries a private marker value. If `Shutdown` receives a context carrying that marker (i.e. it was called from inside a handler), it initiates shutdown and **returns immediately**. This prevents the self-deadlock where a handler waits for the drain that is waiting for it. A handler that wants to observe completion must **not** wait on `Done()` before returning — do that wait in a separate goroutine. `Stop()` is `Shutdown(context.Background())` bounded by `WithDrainTimeout`; from a handler, prefer `Shutdown(ctx)`.
 
 `Done()` closes **only when the bot is fully stopped** — after a graceful `Stop`/`Shutdown` *and* after a fatal polling error, which runs the same shutdown sequence. `Err()` returns the terminal error (e.g. a fatal 401) and is **nil after a graceful stop**; a drain-timeout is reported by `Shutdown`'s return value, not `Err()`.
 
@@ -374,7 +382,8 @@ Client methods: `SetWebhook(ctx, url, secret)` validates https and an 8–256-ch
   | `lst_1 lst_2` | unordered / ordered list |
   | `ind_1 … ind_5` | indentation levels |
 
-- `StyleRange(text, substr string, codes ...StyleCode) (TextStyle, error)` styles the **first occurrence** and computes `start`/`len` in **UTF-16 code units** via `unicode/utf16` (Go strings are UTF-8; byte/rune offsets are wrong for Vietnamese diacritics and emoji). `StyleRangeN(text, substr string, occurrence int, codes ...StyleCode)` selects a later occurrence.
+- `StyleRange(text, substr string, codes ...StyleCode) (TextStyle, error)` styles the **first occurrence** and computes `start`/`len` in **UTF-16 code units** via `unicode/utf16` (Go strings are UTF-8; byte/rune offsets are wrong for Vietnamese diacritics and emoji).
+- `StyleRangeN(text, substr string, occurrence int, codes ...StyleCode) (TextStyle, error)` selects a later occurrence. `occurrence` is **1-based** (`occurrence == 1` is equivalent to `StyleRange`); `occurrence < 1`, `substr == ""`, or a not-found occurrence returns a `ValidationError`/`ErrSubstringNotFound`.
 - `OnCommand(name, fn)` matches text of the form `/name args`, splits args on whitespace, and requires no `@bot` suffix.
 
 ## 11. Testing
@@ -386,7 +395,8 @@ Client methods: `SetWebhook(ctx, url, secret)` validates https and an 8–256-ch
 - **408** (no `OnError`, no backoff) and **401** (full shutdown, `Done()` closes, `Err()` set) tests.
 - **Predicates with invalid JSON bodies**: a 401/429 returned as an HTML error page is still classified by `IsUnauthorized`/`IsRateLimited`; 426 maps to `IsWebhookQuotaExceeded`.
 - **Queue-full** tests: `ProcessUpdate` returns `ErrQueueFull`/`ErrStopped`; polling blocks and resumes; the webhook returns **503 and never a false 200**.
-- **Scheduler fairness**: ready chats are served FIFO, and a chat made ready earlier is picked before one made ready later.
+- **Scheduler fairness**: ready chats are served FIFO, and a chat with a continuously replenished queue is requeued at the tail after its quantum, so it cannot monopolize a worker.
+- **`StyleRangeN`**: 1-based occurrence, `occurrence < 1` and `substr == ""` rejected, and a not-found occurrence returns `ErrSubstringNotFound`.
 - **Goroutine bound**: under sustained load, worker goroutines stay at `WithWorkers` (checked with `goleak`/`runtime.NumGoroutine`).
 - **Stress test** of admission racing `Shutdown` under `-race`.
 - `Shutdown` called from a handler returns promptly; **concurrent handler registration** while updates dispatch passes under `-race`.
