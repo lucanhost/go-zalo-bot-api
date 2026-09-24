@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/lucanhost/go-zalo-bot-api/actions/workflows/ci.yml/badge.svg)](https://github.com/lucanhost/go-zalo-bot-api/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/lucanhost/go-zalo-bot-api.svg)](https://pkg.go.dev/github.com/lucanhost/go-zalo-bot-api)
-[![Go Report Card](https://goreportcard.com/badge/github.com/lucanhost/go-zalo-bot-api)](https://goreportcard.com/report/github.com/lucanhost/go-zalo-bot-api)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/lucanhost/go-zalo-bot-api)](go.mod)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 An idiomatic Go SDK for the [Zalo Bot Platform](https://docs.zaloplatforms.com/docs/BOT).
