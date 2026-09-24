@@ -49,6 +49,7 @@ func (u *User) UnmarshalJSON(b []byte) error {
 
 type BotInfo struct {
 	ID            string `json:"id"`
+	DisplayName   string `json:"display_name"`
 	AccountName   string `json:"account_name"`
 	AccountType   string `json:"account_type"`
 	CanJoinGroups bool   `json:"can_join_groups"`

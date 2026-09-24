@@ -30,11 +30,14 @@ func TestBotInfoNormalizesAccountName(t *testing.T) {
 	}
 
 	var preferred BotInfo
-	if err := json.Unmarshal([]byte(`{"id":"1","account_name":"Preferred","name":"Fallback"}`), &preferred); err != nil {
+	if err := json.Unmarshal([]byte(`{"id":"1","account_name":"Preferred","name":"Fallback","display_name":"Bot HiFlight"}`), &preferred); err != nil {
 		t.Fatal(err)
 	}
 	if preferred.AccountName != "Preferred" {
 		t.Fatalf("AccountName = %q, want %q", preferred.AccountName, "Preferred")
+	}
+	if preferred.DisplayName != "Bot HiFlight" {
+		t.Fatalf("DisplayName = %q, want %q", preferred.DisplayName, "Bot HiFlight")
 	}
 }
 
