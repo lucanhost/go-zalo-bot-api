@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,6 +59,55 @@ func TestPollingTreats408AsEmptyPoll(t *testing.T) {
 	<-b.Done()
 	if onErrorCalls.Load() != 0 {
 		t.Fatalf("OnError called %d times for 408", onErrorCalls.Load())
+	}
+}
+
+func TestPollingWebhookRecheckCancelledByShutdown(t *testing.T) {
+	var updates atomic.Int32
+	var webhookCalls atomic.Int32
+	webhookChecks := make(chan struct{}, 1)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/botTOKEN/getWebhookInfo":
+			if webhookCalls.Add(1) == 1 {
+				_, _ = w.Write([]byte(`{"ok":true,"result":{"url":""}}`))
+				return
+			}
+			select {
+			case webhookChecks <- struct{}{}:
+			default:
+			}
+			<-release
+		case "/botTOKEN/getUpdates":
+			updates.Add(1)
+			_, _ = w.Write([]byte(`{"ok":true,"result":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	b, err := New("TOKEN", WithBaseURL(srv.URL), WithHTTPClient(srv.Client()),
+		WithPolling(PollingOptions{Timeout: time.Millisecond}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := b.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-webhookChecks:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("webhook re-check did not start after %d update polls", updates.Load())
+	}
+	cancel()
+	select {
+	case <-b.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Done() did not close after cancelling blocked webhook re-check")
 	}
 }
 

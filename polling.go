@@ -56,11 +56,20 @@ func (b *Bot) Start(ctx context.Context) error {
 
 	pollCtx, cancel := context.WithCancel(ctx)
 	b.mu.Lock()
+	if b.stopped {
+		b.mu.Unlock()
+		cancel()
+		return ErrStopped
+	}
+	if b.polling.Load() {
+		b.mu.Unlock()
+		cancel()
+		return ErrAlreadyPolling
+	}
 	b.pollCancel = cancel
+	b.polling.Store(true)
 	b.wg.Add(1)
 	b.mu.Unlock()
-
-	b.polling.Store(true)
 	go b.pollLoop(pollCtx)
 
 	go func() {
@@ -92,10 +101,14 @@ func (b *Bot) pollLoop(ctx context.Context) {
 			}
 			if IsPollingTimeout(err) {
 				empty++
-				if b.recheckWebhook(empty) {
+				stop, checked := b.recheckWebhook(ctx, empty)
+				if checked {
+					empty = 0
+				}
+				if stop {
 					return
 				}
-				sleepRemainder(started)
+				sleepRemainder(started, b.cfg.pollTimeout)
 				continue
 			}
 			if IsUnauthorized(err) {
@@ -129,10 +142,14 @@ func (b *Bot) pollLoop(ctx context.Context) {
 		backoff = time.Second
 		if len(updates) == 0 {
 			empty++
-			if b.recheckWebhook(empty) {
+			stop, checked := b.recheckWebhook(ctx, empty)
+			if checked {
+				empty = 0
+			}
+			if stop {
 				return
 			}
-			sleepRemainder(started)
+			sleepRemainder(started, b.cfg.pollTimeout)
 			continue
 		}
 		empty = 0
@@ -144,22 +161,22 @@ func (b *Bot) pollLoop(ctx context.Context) {
 	}
 }
 
-func (b *Bot) recheckWebhook(empty int) bool {
+func (b *Bot) recheckWebhook(ctx context.Context, empty int) (stop, checked bool) {
 	if empty < 30 {
-		return false
+		return false, false
 	}
-	info, err := b.GetWebhookInfo(context.Background())
+	info, err := b.GetWebhookInfo(ctx)
 	if err != nil {
-		return false
+		return false, false
 	}
 	if info.URL != "" {
 		werr := &WebhookActiveError{URL: info.URL}
 		b.setErr(werr)
 		b.reportError(werr)
 		go func() { _ = b.Stop() }()
-		return true
+		return true, true
 	}
-	return false
+	return false, true
 }
 
 func (b *Bot) isStopped() bool {
@@ -168,8 +185,11 @@ func (b *Bot) isStopped() bool {
 	return b.stopped
 }
 
-func sleepRemainder(started time.Time) {
-	if d := time.Second - time.Since(started); d > 0 {
+func sleepRemainder(started time.Time, interval time.Duration) {
+	if interval > time.Second {
+		interval = time.Second
+	}
+	if d := interval - time.Since(started); d > 0 {
 		time.Sleep(d)
 	}
 }
