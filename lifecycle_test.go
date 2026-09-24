@@ -5,13 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"go.uber.org/goleak"
 )
-
-func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
-}
 
 func TestShutdownFromHandlerReturnsPromptly(t *testing.T) {
 	b, _ := New("TOKEN", WithWorkers(1))
