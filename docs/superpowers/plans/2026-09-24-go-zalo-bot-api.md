@@ -1067,10 +1067,13 @@ func TestDispatcherProcessesInOrderPerChat(t *testing.T) {
 		t.Fatal("timeout")
 	}
 	mu.Lock()
-	defer mu.Unlock()
-	if got[0] != "1" || got[1] != "2" || got[2] != "3" {
+	ok := got[0] == "1" && got[1] == "2" && got[2] == "3"
+	mu.Unlock()
+	if !ok {
 		t.Fatalf("order = %v", got)
 	}
+	d.stop()
+	d.wait()
 }
 
 func TestDispatcherNonBlockingReturnsQueueFull(t *testing.T) {
@@ -1754,6 +1757,7 @@ package zalobot
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"runtime/debug"
 	"strings"
