@@ -18,7 +18,7 @@ jobs:
         go: ["1.25.x", "stable"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
           check-latest: true
@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           # golangci-lint v2.12.x is built with Go 1.26 and cannot load a
           # Go 1.27 standard library, so pin the toolchain the linter runs on.
